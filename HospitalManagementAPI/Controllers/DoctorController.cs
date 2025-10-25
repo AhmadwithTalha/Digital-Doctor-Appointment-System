@@ -9,15 +9,6 @@ using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using HospitalManagementAPI.Data;
-using HospitalManagementAPI.Models;
-using Microsoft.EntityFrameworkCore;
-using HospitalManagementAPI.Helpers;
 
 
 namespace HospitalManagementAPI.Controllers
@@ -170,19 +161,19 @@ namespace HospitalManagementAPI.Controllers
             });
         }
 
-        // ✅ 3. Mark Appointment as Done
-        [HttpPut("AppointmentsMarkAsDone/{appointmentId}")]
-        public IActionResult MarkAsDone(int appointmentId)
-        {
-            var appointment = _context.Appointments.Find(appointmentId);
-            if (appointment == null)
-                return NotFound("Appointment not found.");
+        //// ✅ 3. Mark Appointment as Done
+        //[HttpPut("AppointmentsMarkAsDone/{appointmentId}")]
+        //public IActionResult MarkAsDone(int appointmentId)
+        //{
+        //    var appointment = _context.Appointments.Find(appointmentId);
+        //    if (appointment == null)
+        //        return NotFound("Appointment not found.");
 
-            appointment.Status = "Done";
-            _context.SaveChanges();
+        //    appointment.Status = "Done";
+        //    _context.SaveChanges();
 
-            return Ok(new { Message = "Appointment marked as done." });
-        }
+        //    return Ok(new { Message = "Appointment marked as done." });
+        //}
         // -------------------------
         // GET: api/Doctor/MyProfile
         // -------------------------

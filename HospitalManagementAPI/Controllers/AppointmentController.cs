@@ -6,6 +6,10 @@ using HospitalManagementAPI.Data;
 using HospitalManagementAPI.DTOs;
 using HospitalManagementAPI.Models;
 using System.Security.Claims;
+using Microsoft.AspNetCore.SignalR;
+using HospitalManagementAPI.Hubs;
+using HospitalManagementAPI.DTOs;
+
 
 namespace HospitalManagementAPI.Controllers
 {
@@ -14,15 +18,16 @@ namespace HospitalManagementAPI.Controllers
     public class AppointmentController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IHubContext<NotificationHub> _hub;
 
-        public AppointmentController(AppDbContext context)
+        public AppointmentController(AppDbContext context, IHubContext<NotificationHub> hub)
         {
             _context = context;
+            _hub = hub;
         }
 
-       
         // Helper: extract claim values
-        
+
         private int GetPatientIdFromToken()
         {
             var claim = User.Claims.FirstOrDefault(c => c.Type.Equals("patientId", StringComparison.OrdinalIgnoreCase));
@@ -37,11 +42,53 @@ namespace HospitalManagementAPI.Controllers
             if (claim == null || !int.TryParse(claim.Value, out var id)) return 0;
             return id;
         }
+        private async Task BroadcastQueueStatusToPatients(int doctorId, DateTime date, Appointment? current)
+        {
+            // Get all patients who have appointments with this doctor on this date
+            var patientAppointments = await _context.Appointments
+                .Include(a => a.Patient)
+                .Include(a => a.Doctor)
+                .Where(a => a.DoctorId == doctorId && a.Date == date && a.Status != "Cancelled")
+                .ToListAsync();
 
-     
+            if (current == null) return;
+
+            foreach (var appt in patientAppointments)
+            {
+                var notif = new
+                {
+                    appointmentId = appt.AppointmentId,
+                    tokenNumber = appt.TokenNumber,
+                    doctorName = appt.Doctor?.Name,
+                    roomNo = appt.Doctor?.RoomNo,
+                    currentToken = current.TokenNumber,
+                    date = appt.Date.ToString("yyyy-MM-dd")
+                };
+
+                await _hub.Clients.Group($"patient-{appt.PatientId}").SendAsync("QueueStatusUpdate", notif);
+            }
+        }
+
+        // private helper: broadcasts queue summary to doctor group
+        private async Task BroadcastQueueStatus(int doctorId, DateTime date)
+        {
+            var total = await _context.Appointments.CountAsync(a => a.DoctorId == doctorId && a.Date == date);
+            var served = await _context.Appointments.CountAsync(a => a.DoctorId == doctorId && a.Date == date && a.Status == "Done");
+            var remaining = await _context.Appointments.CountAsync(a => a.DoctorId == doctorId && a.Date == date && a.Status == "Pending");
+            var current = await _context.Appointments
+                .Where(a => a.DoctorId == doctorId && a.Date == date && a.Status == "Pending")
+                .OrderBy(a => a.TokenNumber)
+                .Select(a => a.TokenNumber)
+                .FirstOrDefaultAsync();
+
+            var status = new QueueStatusNotification(doctorId, total, served, remaining, current);
+            await _hub.Clients.Group($"doctor-{doctorId}").SendAsync("QueueStatus", status);
+        }
+
+
         // POST: api/Appointment/Book
         // Patient must be authenticated (token must include patientId claim)
-        
+
         [HttpPost("Book")]
         public async Task<IActionResult> Book([FromBody] BookAppointmentDTO dto)
         {
@@ -176,179 +223,157 @@ namespace HospitalManagementAPI.Controllers
                 appointments = result
             });
         }
+        
 
-     
-        // PUT: api/Appointment/Cancel/{id}
-        // Patient cancels their own appointment (or Admin)
-       
-        [HttpPut("CancelPatientownAppointment/{id}")]
-        [Authorize] // patient or admin
-        public async Task<IActionResult> Cancel(int id)
+
+        // POST: api/Appointment/StartQueue/{doctorId}
+        [Authorize(Roles = "Doctor")]
+        [HttpPost("StartQueue/{doctorId}")]
+        public async Task<IActionResult> StartQueue(int doctorId)
         {
-            var appt = await _context.Appointments.FindAsync(id);
-            if (appt == null) return NotFound(new { message = "Appointment not found." });
+            var today = DateTime.UtcNow.Date;
+            // find the first pending appointment (lowest token) for today
+            var first = await _context.Appointments
+                .Include(a => a.Patient)
+                .Include(a => a.Doctor)
+                .Include(a => a.Schedule)
+                .Where(a => a.DoctorId == doctorId && a.Date == today && a.Status == "Pending")
+                .OrderBy(a => a.TokenNumber)
+                .FirstOrDefaultAsync();
 
-            // If already cancelled
-            if (appt.Status == "Cancelled")
-                return BadRequest(new { message = "Appointment already cancelled." });
+            if (first == null)
+                return NotFound(new { message = "No pending appointments for today." });
 
-            // Authorization: either patient who owns it or Admin
-            var patientId = GetPatientIdFromToken();
-            var isAdmin = User.IsInRole("Admin");
+            // build notification for the patient
+            var notif = new NextPatientNotification(
+                first.AppointmentId,
+                first.PatientId,
+                first.Patient?.FullName ?? string.Empty,
+                first.TokenNumber,
+                first.Doctor?.Name ?? string.Empty,
+                first.Doctor?.Department?.DepartmentName ?? string.Empty,
+                first.Doctor?.RoomNo ?? 0,
+                first.Schedule != null ? $"{DateTime.Today.Add(first.Schedule.StartTime):hh:mm tt} - {DateTime.Today.Add(first.Schedule.EndTime):hh:mm tt}" : "N/A",
+                first.Date.ToString("yyyy-MM-dd")
+            );
 
-            if (!isAdmin && patientId != appt.PatientId)
-                return Forbid();
+            // send to patient group and doctor group
+            await _hub.Clients.Group($"patient-{first.PatientId}").SendAsync("NextPatient", notif);
+            await _hub.Clients.Group($"doctor-{doctorId}").SendAsync("NowServing", notif);
+            await BroadcastQueueStatusToPatients(doctorId, today, first);
 
-            // Allow cancellation only if not Done
-            if (appt.Status == "Done")
-                return BadRequest(new { message = "Cannot cancel an appointment that is already marked Done." });
+            // also update doctor dashboard stats
+            await BroadcastQueueStatus(doctorId, today);
 
-            appt.Status = "Cancelled";
-            appt.UpdatedAt = DateTime.UtcNow;
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new { message = "Appointment cancelled." });
+            return Ok(new { message = "Queue started. First patient notified.", appointmentId = first.AppointmentId });
         }
 
-        
         // PUT: api/Appointment/MarkDone/{id}
-        // Doctor marks an appointment as Done
-        
-        [HttpPut("DoctorMarkDoneAppointment/{id}")]
         [Authorize(Roles = "Doctor,Admin")]
-        public async Task<IActionResult> MarkDone(int id)
+        [HttpPut("MarkDone/{id}")]
+        public async Task<IActionResult> MMarkDoneWithNotification(int id)
         {
-            var appt = await _context.Appointments.FindAsync(id);
+            var appt = await _context.Appointments
+                .Include(a => a.Patient)
+                .Include(a => a.Doctor)
+                .Include(a => a.Schedule)
+                .FirstOrDefaultAsync(a => a.AppointmentId == id);
             if (appt == null) return NotFound(new { message = "Appointment not found." });
-
-            // Authorization: doctor who owns appointment or admin
-            var doctorId = GetDoctorIdFromToken();
-            var isAdmin = User.IsInRole("Admin");
-            if (!isAdmin && doctorId != appt.DoctorId)
-                return Forbid();
-
-            if (appt.Status == "Done")
-                return BadRequest(new { message = "Appointment already marked as Done." });
 
             appt.Status = "Done";
             appt.UpdatedAt = DateTime.UtcNow;
-
-          
-
             await _context.SaveChangesAsync();
 
-            // Find next pending appointment (same doctor & date)
+            // after marking done, find next pending appointment for same doctor and date
             var next = await _context.Appointments
-                .Where(a => a.DoctorId == appt.DoctorId && a.Date == appt.Date && a.Status == "Pending" && a.TokenNumber > appt.TokenNumber)
+                .Include(a => a.Patient)
+                .Include(a => a.Schedule)
+                .Where(a => a.DoctorId == appt.DoctorId && a.Date == appt.Date && a.Status == "Pending")
                 .OrderBy(a => a.TokenNumber)
                 .FirstOrDefaultAsync();
 
-            return Ok(new
+            if (next != null)
             {
-                message = "Appointment marked as Done.",
-                appointmentId = appt.AppointmentId,
-                nextAppointment = next == null ? null : new
-                {
+                var notif = new NextPatientNotification(
                     next.AppointmentId,
+                    next.PatientId,
+                    next.Patient?.FullName ?? string.Empty,
                     next.TokenNumber,
-                    next.PatientId
-                }
-            });
+                    appt.Doctor?.Name ?? string.Empty,
+                    appt.Doctor?.Department?.DepartmentName ?? string.Empty,
+                    appt.Doctor?.RoomNo ?? 0,
+                    next.Schedule != null ? $"{DateTime.Today.Add(next.Schedule.StartTime):hh:mm tt} - {DateTime.Today.Add(next.Schedule.EndTime):hh:mm tt}" : "N/A",
+                    next.Date.ToString("yyyy-MM-dd")
+                );
+
+                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notif);
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notif);
+            }
+            else
+            {
+                // No next pending
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("QueueEmpty", new SimpleNotification("Queue", "No more pending patients for today."));
+            }
+
+            // Update doctor stats
+            await BroadcastQueueStatus(appt.DoctorId, appt.Date);
+            await BroadcastQueueStatusToPatients(appt.DoctorId, appt.Date, next);
+
+            return Ok(new { message = "Appointment marked as Done." });
         }
 
-        // PUT: api/Appointment/MarkNoShow/{id}
-        // Doctor marks an appointment as NoShow (skip)
-      
-        [HttpPut("DoctorMarkNoShowAppointment/{id}")]
+        // PUT: api/Appointment/Skip/{id}
         [Authorize(Roles = "Doctor,Admin")]
-        public async Task<IActionResult> MarkNoShow(int id)
+        [HttpPut("Skip/{id}")]
+        public async Task<IActionResult> Skip(int id)
         {
-            var appt = await _context.Appointments.FindAsync(id);
+            var appt = await _context.Appointments
+                .Include(a => a.Patient)
+                .Include(a => a.Doctor)
+                .FirstOrDefaultAsync(a => a.AppointmentId == id);
             if (appt == null) return NotFound(new { message = "Appointment not found." });
 
-            var doctorId = GetDoctorIdFromToken();
-            var isAdmin = User.IsInRole("Admin");
-            if (!isAdmin && doctorId != appt.DoctorId)
-                return Forbid();
-
-            if (appt.Status == "NoShow")
-                return BadRequest(new { message = "Appointment already marked as NoShow." });
-
-            appt.Status = "NoShow";
+            appt.Status = "Skipped";
             appt.UpdatedAt = DateTime.UtcNow;
-
             await _context.SaveChangesAsync();
 
-            // Find next pending appointment (same doctor & date)
+            // find next pending
             var next = await _context.Appointments
-                .Where(a => a.DoctorId == appt.DoctorId && a.Date == appt.Date && a.Status == "Pending" && a.TokenNumber > appt.TokenNumber)
+                .Include(a => a.Patient)
+                .Include(a => a.Schedule)
+                .Where(a => a.DoctorId == appt.DoctorId && a.Date == appt.Date && a.Status == "Pending")
                 .OrderBy(a => a.TokenNumber)
                 .FirstOrDefaultAsync();
 
-            return Ok(new
+            if (next != null)
             {
-                message = "Appointment marked as NoShow.",
-                appointmentId = appt.AppointmentId,
-                nextAppointment = next == null ? null : new
-                {
+                var notif = new NextPatientNotification(
                     next.AppointmentId,
+                    next.PatientId,
+                    next.Patient?.FullName ?? string.Empty,
                     next.TokenNumber,
-                    next.PatientId
-                }
-            });
-        }
+                    appt.Doctor?.Name ?? string.Empty,
+                    appt.Doctor?.Department?.DepartmentName ?? string.Empty,
+                    appt.Doctor?.RoomNo ?? 0,
+                    next.Schedule != null ? $"{DateTime.Today.Add(next.Schedule.StartTime):hh:mm tt} - {DateTime.Today.Add(next.Schedule.EndTime):hh:mm tt}" : "N/A",
+                    next.Date.ToString("yyyy-MM-dd")
+                );
 
-     
-        // GET: api/Appointment/MyAppointments
-        // Patient can view his/her appointments (requires patient token)
-        [HttpGet("PatientMyAppointments")]
-        [Authorize(Roles = "Patient")]
-        public async Task<IActionResult> MyAppointments()
-        {
-            var authHeader = Request.Headers["Authorization"].FirstOrDefault();
-            int patientId = 0;
-            if (!string.IsNullOrEmpty(authHeader) && authHeader.StartsWith("Bearer "))
-            {
-                var token = authHeader.Substring("Bearer ".Length).Trim();
-                var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
-                try
-                {
-                    var jwt = handler.ReadJwtToken(token);
-                    var claim = jwt.Claims.FirstOrDefault(c => c.Type == "patientId")?.Value;
-                    int.TryParse(claim, out patientId);
-                }
-                catch { patientId = 0; }
+                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notif);
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notif);
             }
-            if (patientId == 0)
-                return Unauthorized(new { message = "Authorization required (include Bearer token)." });
-
-            var list = await _context.Appointments
-                .Include(a => a.Doctor)
-                    .ThenInclude(d => d.Department)
-                .Include(a => a.Schedule)
-                .Where(a => a.PatientId == patientId)
-                .OrderByDescending(a => a.Date)
-                .ToListAsync();
-
-            var result = list.Select(a => new
+            else
             {
-                appointmentId = a.AppointmentId,
-                patientId = a.PatientId,
-                patientName = a.Patient?.FullName,
-                tokenNumber = a.TokenNumber,
-                doctorName = a.Doctor?.Name,
-                departmentName = a.Doctor?.Department?.DepartmentName,
-                roomNo = a.Doctor?.RoomNo,
-                scheduleTime = a.Schedule != null
-                    ? $"{DateTime.Today.Add(a.Schedule.StartTime):hh:mm tt} - {DateTime.Today.Add(a.Schedule.EndTime):hh:mm tt}"
-                    : "N/A",
-                date = a.Date.ToString("yyyy-MM-dd"),
-                status = a.Status
-            });
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("QueueEmpty", new SimpleNotification("Queue", "No more pending patients for today."));
+            }
 
-            return Ok(result);
+            await BroadcastQueueStatus(appt.DoctorId, appt.Date);
+            await BroadcastQueueStatusToPatients(appt.DoctorId, appt.Date, next);
+
+
+            return Ok(new { message = "Appointment marked as Skipped." });
         }
+
 
     }
 }
