@@ -1,0 +1,23 @@
+# Visual Studio files
+.vs/
+*.user
+*.suo
+
+# Build results
+bin/
+obj/
+TestResults/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Packages
+packages/
+*.nupkg
+
+# Other
+launchSettings.json

@@ -28,7 +28,7 @@ public class Appointment
     public string Status { get; set; } = "Pending";
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    public DateTime? UpdatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; } = DateTime.UtcNow;
 
     // Navigation Properties
     public Doctor Doctor { get; set; }

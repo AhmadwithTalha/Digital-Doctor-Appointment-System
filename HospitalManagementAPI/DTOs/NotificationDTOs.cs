@@ -1,5 +1,4 @@
-﻿// DTOs/NotificationDTOs.cs
-namespace HospitalManagementAPI.DTOs
+﻿namespace HospitalManagementAPI.DTOs
 {
     public record NextPatientNotification(
         int AppointmentId,
@@ -18,7 +17,7 @@ namespace HospitalManagementAPI.DTOs
         int TotalAppointments,
         int ServedCount,
         int RemainingCount,
-        int CurrentToken // token being served now (0 if none)
+        int CurrentToken
     );
 
     public record SimpleNotification(string Title, string Message);

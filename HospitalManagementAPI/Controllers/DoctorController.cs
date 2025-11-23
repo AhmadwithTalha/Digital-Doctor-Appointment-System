@@ -34,54 +34,7 @@ namespace HospitalManagementAPI.Controllers
             _configuration = configuration;
         }
 
-        // 🧩 Doctor Login API
-        [HttpPost("DoctorLogin")]
-        public async Task<IActionResult> DoctorLogin([FromBody] LoginRequest request)
-        {
-            // Find doctor by email
-            var doctor = await _context.Doctors.FirstOrDefaultAsync(d => d.Email == request.Email);
-            if (doctor == null)
-                return BadRequest(new { message = "Invalid email or password." });
-
-            // Check password (for now plain text — later we’ll hash it)
-            if (!PasswordHelper.Verify(request.Password, doctor.Password))
-                return BadRequest(new { message = "Invalid email or password." });
-
-            // Generate JWT Token
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.ASCII.GetBytes(_configuration["Jwt:Key"]);
-
-            var tokenDescriptor = new SecurityTokenDescriptor
-            {
-                Subject = new ClaimsIdentity(new[]
-                {
-                    new Claim("doctorId", doctor.DoctorId.ToString()),
-                    new Claim(ClaimTypes.Role, "Doctor"),
-                    new Claim(ClaimTypes.Email, doctor.Email),
-                    new Claim("DoctorId", doctor.DoctorId.ToString())
-                }),
-                Expires = DateTime.UtcNow.AddHours(1),
-                SigningCredentials = new SigningCredentials(
-                    new SymmetricSecurityKey(key),
-                    SecurityAlgorithms.HmacSha256Signature)
-
-
-            };
-
-            var token = tokenHandler.CreateToken(tokenDescriptor);
-
-            return Ok(new
-            {
-                message = "Login successful!",
-                token = tokenHandler.WriteToken(token),
-                doctorName = doctor.Name,
-                role = doctor.Role
-            });
-
-
-        }
-
-        // ✅ Get logged-in doctor ID from JWT
+        //Get logged-in doctor ID from JWT
         private int GetDoctorId()
         {
             var doctorIdClaim = User.FindFirst("DoctorId");
@@ -90,7 +43,7 @@ namespace HospitalManagementAPI.Controllers
             return int.Parse(doctorIdClaim.Value);
         }
 
-        // ✅ 1. Get Tomorrow's Appointments
+        //Get Tomorrow's Appointments
         [HttpGet("GetListOfTomorrowAppointments")]
         public IActionResult GetTomorrowAppointments()
         {
@@ -114,7 +67,7 @@ namespace HospitalManagementAPI.Controllers
             return Ok(appointments);
         }
 
-        // ✅ 2. Get Appointment History (by date)
+        //Get Appointment History (by date)
         [HttpGet("GetHistoryOfAppointmentsByDate")]
         public IActionResult GetHistoryByDate([FromQuery] DateTime date)
         {
@@ -127,7 +80,7 @@ namespace HospitalManagementAPI.Controllers
                 {
                     a.AppointmentId,
                     a.TokenNumber,
-                    PatientName = a.Patient.FullName,
+                    PatientName = a.Patient != null ? a.Patient.FullName : "Unknown",
                     a.Status,
                     a.Date
                 })
@@ -161,22 +114,6 @@ namespace HospitalManagementAPI.Controllers
             });
         }
 
-        //// ✅ 3. Mark Appointment as Done
-        //[HttpPut("AppointmentsMarkAsDone/{appointmentId}")]
-        //public IActionResult MarkAsDone(int appointmentId)
-        //{
-        //    var appointment = _context.Appointments.Find(appointmentId);
-        //    if (appointment == null)
-        //        return NotFound("Appointment not found.");
-
-        //    appointment.Status = "Done";
-        //    _context.SaveChanges();
-
-        //    return Ok(new { Message = "Appointment marked as done." });
-        //}
-        // -------------------------
-        // GET: api/Doctor/MyProfile
-        // -------------------------
         [HttpGet("MyProfile")]
         [Authorize(Roles = "Doctor")]
         public async Task<IActionResult> GetMyProfile()
@@ -209,11 +146,9 @@ namespace HospitalManagementAPI.Controllers
 
             return Ok(dto);
         }
-
-        // -----------------------------------------
         // PUT: api/Doctor/UpdateProfile
         // Doctor can update email and fee only
-        // -----------------------------------------
+       
         [HttpPut("UpdateProfile")]
         [Authorize(Roles = "Doctor")]
         public async Task<IActionResult> UpdateProfile([FromBody] DoctorUpdateDTO dto)
@@ -251,25 +186,31 @@ namespace HospitalManagementAPI.Controllers
             return Ok(new { message = "Profile updated successfully." });
         }
 
-        // -----------------------------------------
         // PUT: api/Doctor/ChangePassword
-        // -----------------------------------------
         [HttpPut("ChangePassword")]
         [Authorize(Roles = "Doctor")]
         public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordDTO dto)
         {
-            var claim = User.FindFirst("doctorId")?.Value;
-            if (string.IsNullOrEmpty(claim))
-                return Unauthorized();
-            if (!int.TryParse(claim, out int doctorId))
-                return Unauthorized();
+            var doctorIdClaim = User.FindFirst("doctorId")?.Value;
+            if (string.IsNullOrEmpty(doctorIdClaim))
+                return Unauthorized(new { message = "Doctor ID not found in token." });
 
-            var doctor = await _context.Doctors.FindAsync(doctorId);
+            if (!int.TryParse(doctorIdClaim, out int doctorId))
+                return Unauthorized(new { message = "Invalid doctor ID." });
+
+            var doctor = await _context.Doctors
+                .Include(d => d.User) // include User to access password
+                .FirstOrDefaultAsync(d => d.Id == doctorId);
+
             if (doctor == null)
-                return NotFound("Doctor not found.");
+                return NotFound(new { message = "Doctor not found." });
 
-            // Note: currently passwords are plain-text in DB (for tests). In production use hashing.
-            if (doctor.Password != dto.OldPassword)
+            var user = doctor.User;
+            if (user == null)
+                return NotFound(new { message = "User account not found for this doctor." });
+
+            // ✅ Verify old password (using BCrypt or your helper)
+            if (!BCrypt.Net.BCrypt.Verify(dto.OldPassword, user.PasswordHash))
                 return BadRequest(new { message = "Old password is incorrect." });
 
             if (string.IsNullOrWhiteSpace(dto.NewPassword) || dto.NewPassword.Length < 6)
@@ -278,16 +219,17 @@ namespace HospitalManagementAPI.Controllers
             if (dto.NewPassword == dto.OldPassword)
                 return BadRequest(new { message = "New password must be different from old password." });
 
-            doctor.Password = dto.NewPassword;
+            // ✅ Hash and update the new password
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
+
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Password changed successfully." });
         }
 
-        // -------------------------------------------------------
+
         // POST: api/Doctor/RequestPasswordReset
         // (Public) - sends email with a reset token link via SendGrid
-        // -------------------------------------------------------
         [HttpPost("RequestPasswordReset")]
         [AllowAnonymous]
         public async Task<IActionResult> RequestPasswordReset([FromBody] HospitalManagementAPI.DTOs.PasswordResetRequestDTO requestDto)
@@ -347,19 +289,19 @@ namespace HospitalManagementAPI.Controllers
             return Ok(new { message = "If the email exists, a password reset link has been issued." });
         }
 
-        // -----------------------------------------
         // POST: api/Doctor/ResetPassword
         // (Public) — reset using token
-        // -----------------------------------------
         [HttpPost("ResetPassword")]
         [AllowAnonymous]
-        public async Task<IActionResult> ResetPassword([FromBody] HospitalManagementAPI.DTOs.ResetPasswordDTO dto)
+        public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordDTO dto)
         {
             if (string.IsNullOrEmpty(dto.Token) || string.IsNullOrEmpty(dto.NewPassword))
                 return BadRequest(new { message = "Token and new password are required." });
 
+            // include related Doctor + User (because password is in User table)
             var reset = await _context.PasswordResetRequests
                 .Include(r => r.Doctor)
+                    .ThenInclude(d => d.User)
                 .FirstOrDefaultAsync(r => r.Token == dto.Token);
 
             if (reset == null)
@@ -371,14 +313,23 @@ namespace HospitalManagementAPI.Controllers
             if (dto.NewPassword.Length < 6)
                 return BadRequest(new { message = "New password must be at least 6 characters." });
 
-            // update password (plain text for now - consider hashing)
-            reset.Doctor!.Password = dto.NewPassword;
+            //Access related User (doctor's account)
+            var user = reset.Doctor?.User;
+            if (user == null)
+                return BadRequest(new { message = "Associated user account not found." });
+
+            //Hash and update password
+            user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.NewPassword);
+
+            //Mark token as used
             reset.IsUsed = true;
             reset.ExpiresAt = DateTime.UtcNow;
+
             await _context.SaveChangesAsync();
 
             return Ok(new { message = "Password has been reset successfully." });
         }
+
     }
 
 }

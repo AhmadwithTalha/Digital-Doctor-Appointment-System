@@ -1,14 +1,14 @@
 ﻿
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using HospitalManagementAPI.Data;
 using HospitalManagementAPI.DTOs;
-using HospitalManagementAPI.Models;
-using System.Security.Claims;
-using Microsoft.AspNetCore.SignalR;
 using HospitalManagementAPI.Hubs;
-using HospitalManagementAPI.DTOs;
+using HospitalManagementAPI.Models;
+using HospitalManagementAPI.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 
 
 namespace HospitalManagementAPI.Controllers
@@ -19,11 +19,14 @@ namespace HospitalManagementAPI.Controllers
     {
         private readonly AppDbContext _context;
         private readonly IHubContext<NotificationHub> _hub;
+        private readonly NotificationService _notificationService;
 
-        public AppointmentController(AppDbContext context, IHubContext<NotificationHub> hub)
+
+        public AppointmentController(AppDbContext context, IHubContext<NotificationHub> hub,NotificationService notificationService)
         {
             _context = context;
             _hub = hub;
+            _notificationService = notificationService;
         }
 
         // Helper: extract claim values
@@ -169,7 +172,8 @@ namespace HospitalManagementAPI.Controllers
                 message = "Appointment booked successfully.",
                 appointmentId = appointment.AppointmentId,
                 patientId = patient?.PatientId,
-                patientName = patient?.FullName,
+                //patientName = patient != null ? x.Patient.FullName : "Unknown",
+                patientName = patient?.FullName ?? "Unknown",
                 tokenNumber = appointment.TokenNumber,
                 doctorName = doctor.Name,
                 departmentName = doctor.Department?.DepartmentName,
@@ -187,12 +191,11 @@ namespace HospitalManagementAPI.Controllers
         // Doctor (or Admin) can view appointments for a date (default = today)
       
         [HttpGet("DoctorCheackTodayAppointments/{doctorId}")]
-        [Authorize] // require JWT; we will ensure role/ownership below
+        [Authorize] 
         public async Task<IActionResult> DoctorToday(int doctorId, [FromQuery] DateTime? date)
         {
             var requestDate = date?.Date ?? DateTime.UtcNow.Date;
 
-            // If caller is a doctor, ensure they only access their own data
             var callerDoctorId = GetDoctorIdFromToken();
             var isDoctor = callerDoctorId > 0;
             var isAdmin = User.IsInRole("Admin");
@@ -244,7 +247,6 @@ namespace HospitalManagementAPI.Controllers
             if (first == null)
                 return NotFound(new { message = "No pending appointments for today." });
 
-            // build notification for the patient
             var notif = new NextPatientNotification(
                 first.AppointmentId,
                 first.PatientId,
@@ -257,14 +259,14 @@ namespace HospitalManagementAPI.Controllers
                 first.Date.ToString("yyyy-MM-dd")
             );
 
-            // send to patient group and doctor group
             await _hub.Clients.Group($"patient-{first.PatientId}").SendAsync("NextPatient", notif);
             await _hub.Clients.Group($"doctor-{doctorId}").SendAsync("NowServing", notif);
             await BroadcastQueueStatusToPatients(doctorId, today, first);
-
-            // also update doctor dashboard stats
             await BroadcastQueueStatus(doctorId, today);
 
+
+            await _notificationService.SendNotificationAsync($"patient-{first.PatientId}", $"Your turn! Token #{first.TokenNumber} with Dr. {first.Doctor?.Name}");
+            await _notificationService.SendNotificationAsync($"doctor-{doctorId}", $"Now serving Token #{first.TokenNumber} ({first.Patient?.FullName})");
             return Ok(new { message = "Queue started. First patient notified.", appointmentId = first.AppointmentId });
         }
 
@@ -278,13 +280,16 @@ namespace HospitalManagementAPI.Controllers
                 .Include(a => a.Doctor)
                 .Include(a => a.Schedule)
                 .FirstOrDefaultAsync(a => a.AppointmentId == id);
+
             if (appt == null) return NotFound(new { message = "Appointment not found." });
 
             appt.Status = "Done";
             appt.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
-            // after marking done, find next pending appointment for same doctor and date
+            await _notificationService.SendNotificationAsync($"patient-{appt.PatientId}", $"Your appointment with Dr. {appt.Doctor?.Name} is marked Done.");
+            await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", $"Token #{appt.TokenNumber} ({appt.Patient?.FullName}) marked Done.");
+
             var next = await _context.Appointments
                 .Include(a => a.Patient)
                 .Include(a => a.Schedule)
@@ -294,7 +299,7 @@ namespace HospitalManagementAPI.Controllers
 
             if (next != null)
             {
-                var notif = new NextPatientNotification(
+                var notifNext = new NextPatientNotification(
                     next.AppointmentId,
                     next.PatientId,
                     next.Patient?.FullName ?? string.Empty,
@@ -306,21 +311,25 @@ namespace HospitalManagementAPI.Controllers
                     next.Date.ToString("yyyy-MM-dd")
                 );
 
-                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notif);
-                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notif);
+                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notifNext);
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notifNext);
+
+                // Save notification for next patient
+                await _notificationService.SendNotificationAsync($"patient-{next.PatientId}", $"Your turn! Token #{next.TokenNumber} with Dr. {appt.Doctor?.Name}");
+                await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", $"Now serving Token #{next.TokenNumber} ({next.Patient?.FullName})");
             }
             else
             {
-                // No next pending
                 await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("QueueEmpty", new SimpleNotification("Queue", "No more pending patients for today."));
+                await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", "Queue is empty for today.");
             }
 
-            // Update doctor stats
             await BroadcastQueueStatus(appt.DoctorId, appt.Date);
             await BroadcastQueueStatusToPatients(appt.DoctorId, appt.Date, next);
 
             return Ok(new { message = "Appointment marked as Done." });
         }
+
 
         // PUT: api/Appointment/Skip/{id}
         [Authorize(Roles = "Doctor,Admin")]
@@ -337,7 +346,11 @@ namespace HospitalManagementAPI.Controllers
             appt.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
-            // find next pending
+            // Save notification for skipped appointment
+            await _notificationService.SendNotificationAsync($"patient-{appt.PatientId}", $"Your appointment with Dr. {appt.Doctor?.Name} has been skipped.");
+            await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", $"Token #{appt.TokenNumber} ({appt.Patient?.FullName}) has been skipped.");
+
+            // Find next pending
             var next = await _context.Appointments
                 .Include(a => a.Patient)
                 .Include(a => a.Schedule)
@@ -347,7 +360,7 @@ namespace HospitalManagementAPI.Controllers
 
             if (next != null)
             {
-                var notif = new NextPatientNotification(
+                var notifNext = new NextPatientNotification(
                     next.AppointmentId,
                     next.PatientId,
                     next.Patient?.FullName ?? string.Empty,
@@ -359,20 +372,25 @@ namespace HospitalManagementAPI.Controllers
                     next.Date.ToString("yyyy-MM-dd")
                 );
 
-                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notif);
-                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notif);
+                await _hub.Clients.Group($"patient-{next.PatientId}").SendAsync("NextPatient", notifNext);
+                await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("NowServing", notifNext);
+
+                // Save notification for next patient
+                await _notificationService.SendNotificationAsync($"patient-{next.PatientId}", $"Your turn! Token #{next.TokenNumber} with Dr. {appt.Doctor?.Name}");
+                await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", $"Now serving Token #{next.TokenNumber} ({next.Patient?.FullName})");
             }
             else
             {
                 await _hub.Clients.Group($"doctor-{appt.DoctorId}").SendAsync("QueueEmpty", new SimpleNotification("Queue", "No more pending patients for today."));
+                await _notificationService.SendNotificationAsync($"doctor-{appt.DoctorId}", "Queue is empty for today.");
             }
 
             await BroadcastQueueStatus(appt.DoctorId, appt.Date);
             await BroadcastQueueStatusToPatients(appt.DoctorId, appt.Date, next);
 
-
             return Ok(new { message = "Appointment marked as Skipped." });
         }
+
 
 
     }

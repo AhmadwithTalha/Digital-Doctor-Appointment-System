@@ -2,5 +2,3 @@
 
 GET {{HospitalManagementAPI_HostAddress}}/weatherforecast/
 Accept: application/json
-
-###

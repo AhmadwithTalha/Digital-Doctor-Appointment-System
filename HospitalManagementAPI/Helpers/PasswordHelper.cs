@@ -1,5 +1,4 @@
-﻿// File: Helpers/PasswordHelper.cs
-using BCrypt.Net;
+﻿using BCrypt.Net;
 
 namespace HospitalManagementAPI.Helpers
 {

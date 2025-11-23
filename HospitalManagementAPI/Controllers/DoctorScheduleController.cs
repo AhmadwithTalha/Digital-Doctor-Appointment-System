@@ -1,4 +1,5 @@
 ﻿using HospitalManagementAPI.Data;
+using HospitalManagementAPI.DTOs;
 using HospitalManagementAPI.Helpers;
 using HospitalManagementAPI.Models;
 using Microsoft.AspNetCore.Authorization;
@@ -24,34 +25,29 @@ namespace HospitalManagementAPI.Controllers
     [FromQuery] string? doctorName,
     [FromQuery] string? day)
         {
-            // Start with all schedules
             var query = _context.DoctorSchedules
                 .Include(s => s.Doctor)
                 .ThenInclude(d => d.Department)
                 .AsQueryable();
 
-            // 🔹 Filter by Department Name (if provided)
             if (!string.IsNullOrWhiteSpace(departmentName))
             {
                 query = query.Where(s =>
                     s.Doctor.Department.DepartmentName.ToLower().Contains(departmentName.ToLower()));
             }
 
-            // 🔹 Filter by Doctor Name (if provided)
             if (!string.IsNullOrWhiteSpace(doctorName))
             {
                 query = query.Where(s =>
                     s.Doctor.Name.ToLower().Contains(doctorName.ToLower()));
             }
 
-            // 🔹 Filter by Day (if provided)
             if (!string.IsNullOrWhiteSpace(day))
             {
                 query = query.Where(s =>
                     s.Day.ToLower().Contains(day.ToLower()));
             }
 
-            // 🔹 Build final result
             var schedules = query
                 .Select(s => new DoctorScheduleDTO
                 {
@@ -77,7 +73,7 @@ namespace HospitalManagementAPI.Controllers
         }
 
 
-        // ✅ Add new schedule
+        //Add new schedule
         [Authorize(Roles = "Admin")]
         [HttpPost("AddSchedule")]
         public IActionResult AddSchedule([FromBody] DoctorScheduleDTO dto)
@@ -101,10 +97,10 @@ namespace HospitalManagementAPI.Controllers
             return Ok(schedule);
         }
 
-        // ✅ Update Schedule
+        //Update Schedule
         [Authorize(Roles = "Admin")]
         [HttpPut("UpdateSchedule/{id}")]
-        public IActionResult UpdateSchedule(int id, [FromBody] DoctorSchedule updatedSchedule)
+        public IActionResult UpdateSchedule(int id, [FromBody] UpdateDoctorScheduleDTO updatedSchedule)
         {
             var schedule = _context.DoctorSchedules.Find(id);
             if (schedule == null)
@@ -120,7 +116,7 @@ namespace HospitalManagementAPI.Controllers
 
             return Ok(schedule);
         }
-        // ✅ Delete Schedule
+        //Delete Schedule
         [Authorize(Roles = "Admin")]
         [HttpDelete("DeleteSchedule/{id}")]
         public IActionResult DeleteSchedule(int id)

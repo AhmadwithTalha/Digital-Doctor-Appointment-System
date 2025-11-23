@@ -10,7 +10,7 @@ namespace HospitalManagementAPI.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
-    [Authorize(Roles = "Admin")] // ✅ Only admin can access this report
+    [Authorize(Roles = "Admin")] 
     public class AdminReportController : ControllerBase
     {
         private readonly AppDbContext _context;
@@ -20,7 +20,7 @@ namespace HospitalManagementAPI.Controllers
             _context = context;
         }
 
-        // ✅ GET: api/AdminReport/HospitalSummary
+        //GET: api/AdminReport/HospitalSummary
         [HttpGet("HospitalSummaryWithTotalFee")]
         public async Task<IActionResult> GetHospitalSummary(
             DateTime? startDate = null,
@@ -28,7 +28,6 @@ namespace HospitalManagementAPI.Controllers
             int? departmentId = null,
             int? doctorId = null)
         {
-            // Default date range = all time
             var query = _context.Appointments
                 .Include(a => a.Doctor)
                 .ThenInclude(d => d.Department)
@@ -57,7 +56,7 @@ namespace HospitalManagementAPI.Controllers
                     DoctorName = a.Doctor.Name,
                     DepartmentId = a.Doctor.DepartmentId,
                     DepartmentName = a.Doctor.Department.DepartmentName,
-                    Fee = a.Doctor.Fee // ✅ decimal (not nullable)
+                    Fee = a.Doctor.Fee 
                 })
                 .Select(g => new
                 {
@@ -75,7 +74,7 @@ namespace HospitalManagementAPI.Controllers
                 .ThenBy(r => r.DoctorName)
                 .ToList();
 
-            // ✅ Also return hospital-wide totals
+            //Also return hospital-wide totals
             var overall = new
             {
                 TotalDepartments = report.Select(r => r.DepartmentId).Distinct().Count(),

@@ -1,21 +1,18 @@
 ﻿using BCrypt.Net; 
 using HospitalManagementAPI.Data;
+using HospitalManagementAPI.DTOs;
 using HospitalManagementAPI.Helpers;
 using HospitalManagementAPI.Models;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.IdentityModel.Tokens;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Text;
-using HospitalManagementAPI.Helpers; // PasswordHelper
 using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+
 
 
 namespace HospitalManagementAPI.Controllers
@@ -35,14 +32,14 @@ namespace HospitalManagementAPI.Controllers
        
 
         
-        // ✅ GET: api/Admin/GetRegisteredPatients?startDate=2025-10-01&endDate=2025-10-20
+        //GET: api/Admin/GetRegisteredPatients?startDate=2025-10-01&endDate=2025-10-20
         [Authorize(Roles = "Admin")]
         [HttpGet("GetRegisteredPatients")]
         public async Task<IActionResult> GetRegisteredPatients([FromQuery] DateTime? startDate, [FromQuery] DateTime? endDate)
         {
             // Default range handling
             DateTime start = startDate ?? DateTime.MinValue;
-            DateTime end = endDate ?? DateTime.UtcNow.Date.AddDays(1).AddTicks(-1); // include end of today
+            DateTime end = endDate ?? DateTime.UtcNow.Date.AddDays(1).AddTicks(-1);
 
             var patients = await _context.Patients
                 .Where(p => p.CreatedAt >= start && p.CreatedAt <= end)
@@ -72,27 +69,35 @@ namespace HospitalManagementAPI.Controllers
             });
         }
 
-            // ✅ Add new Department
+            //Add new Department
             [Authorize(Roles = "Admin")]
         [HttpPost("AddDepartment")]
-        public IActionResult AddDepartment([FromBody] Department department)
+        public async Task<IActionResult> AddDepartment([FromBody] CreateDepartmentDTO dto)
         {
-            _context.Departments.Add(department);
-            _context.SaveChanges();
-            return Ok(department);
+            var dept = new Department
+            {
+                DepartmentName = dto.DepartmentName,
+                Description = dto.Description
+            };
+
+            _context.Departments.Add(dept);
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Department created successfully", dept.DepartmentId });
         }
 
-        // ✅ Get all Departments
+
+        //Get all Departments
         [HttpGet("GetDepartments")]
         public IActionResult GetDepartments()
         {
             return Ok(_context.Departments.ToList());
         }
 
-        // ✅ Update Department
+        //Update Department
         [Authorize(Roles = "Admin")]
         [HttpPut("UpdateDepartment/{id}")]
-        public IActionResult UpdateDepartment(int id, [FromBody] Department updatedDepartment)
+        public IActionResult UpdateDepartment(int id, [FromBody] UpdateDepartmentDTO updatedDepartment)
         {
             var department = _context.Departments.Find(id);
             if (department == null)
@@ -105,7 +110,7 @@ namespace HospitalManagementAPI.Controllers
 
             return Ok(department);
         }
-        // ✅ Delete Department
+        //Delete Department
         [Authorize(Roles = "Admin")]
         [HttpDelete("DeleteDepartment/{id}")]
         public IActionResult DeleteDepartment(int id)
@@ -121,21 +126,29 @@ namespace HospitalManagementAPI.Controllers
         }
 
 
-        // ✅ Add Doctor
+        
         [Authorize(Roles = "Admin")]
         [HttpPost("AddDoctor")]
-        public IActionResult AddDoctor([FromBody] DoctorDTO dto)
+        public async Task<IActionResult> AddDoctor([FromBody] CreateDoctorDTO dto)
         {
-            if (dto.Fee <= 0)
-                return BadRequest("Doctor fee must be greater than 0.");
+            if (await _context.Doctors.AnyAsync(d => d.Email.ToLower() == dto.Email.ToLower()))
+                return BadRequest(new { message = "Doctor with this email already exists." });
 
-            var existingDoctor = _context.Doctors
-                .FirstOrDefault(d => d.Name.ToLower() == dto.Name.ToLower()
-                                  && d.DepartmentId == dto.DepartmentId);
+            // 1️⃣ Create User First
+            var user = new User
+            {
+                Email = dto.Email,
+                PasswordHash = PasswordHelper.Hash(dto.Password),
+                Role = "Doctor",
+                UserType = 2,
+                Status = "Active",
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
 
-            if (existingDoctor != null)
-                return BadRequest("A doctor with this name already exists in this department.");
-            string hashed = BCrypt.Net.BCrypt.HashPassword(dto.Password);
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync(); 
+
             var doctor = new Doctor
             {
                 Name = dto.Name,
@@ -143,54 +156,52 @@ namespace HospitalManagementAPI.Controllers
                 Specialization = dto.Specialization,
                 DepartmentId = dto.DepartmentId,
                 RoomNo = dto.RoomNo,
-                //Password = hashed,
-                Password = PasswordHelper.Hash(dto.Password),
-
-                Fee = dto.Fee
-            }; 
+                Fee = dto.Fee,
+                Role = "Doctor",
+                UserId = user.UserId  
+            };
 
             _context.Doctors.Add(doctor);
-            _context.SaveChanges();
+            await _context.SaveChangesAsync();
 
-            return Ok(doctor);
+            user.RefId = doctor.DoctorId;
+            await _context.SaveChangesAsync();
+
+            return Ok(new { message = "Doctor added successfully", doctorId = doctor.DoctorId });
         }
 
 
 
 
-        // ✅ Get all Doctors
+
+        // Get all Doctors
         [HttpGet("GetDoctors")]
         public IActionResult GetDoctors()
         {
             return Ok(_context.Doctors.ToList());
         }
 
-        // ✅ Update Doctor
+        //Update Doctor
         [Authorize(Roles = "Admin")]
         [HttpPut("UpdateDoctor/{id}")]
-        public IActionResult UpdateDoctor(int id, [FromBody] Doctor updatedDoctor)
+        public async Task<IActionResult> UpdateDoctor(int id, [FromBody] UpdateDoctorDTO dto)
         {
-            if (updatedDoctor.Fee <= 0)
-            {
-                return BadRequest("Doctor fee must be greater than 0.");
-            }
-            var doctor = _context.Doctors.Find(id);
+            var doctor = await _context.Doctors.FindAsync(id);
             if (doctor == null)
-                return NotFound("Doctor not found.");
+                return NotFound(new { message = "Doctor not found." });
 
-            doctor.Name = updatedDoctor.Name;
-            doctor.Email = updatedDoctor.Email;
-            doctor.Specialization = updatedDoctor.Specialization;
-            doctor.DepartmentId = updatedDoctor.DepartmentId;
-            doctor.RoomNo = updatedDoctor.RoomNo;
-            doctor.Fee = updatedDoctor.Fee;
+            doctor.Name = dto.Name;
+            doctor.Specialization = dto.Specialization;
+            doctor.DepartmentId = dto.DepartmentId;
+            doctor.RoomNo = dto.RoomNo;
+            doctor.Fee = dto.Fee;
 
-            _context.SaveChanges();
-
-            return Ok(doctor);
+            await _context.SaveChangesAsync();
+            return Ok(new { message = "Doctor updated successfully" });
         }
 
-        // ✅ Delete Doctor
+
+        //Delete Doctor
         [Authorize(Roles = "Admin")]
         [HttpDelete("DeleteDoctor/{id}")]
         public IActionResult DeleteDoctor(int id)
@@ -204,6 +215,41 @@ namespace HospitalManagementAPI.Controllers
 
             return Ok("Doctor deleted successfully.");
         }
+
+        [Authorize(Roles = "Admin")]
+        [HttpDelete("DeletePatient/{patientId}")]
+        public async Task<IActionResult> DeletePatient(int patientId)
+        {
+            // Find patient
+            var patient = await _context.Patients.FirstOrDefaultAsync(p => p.PatientId == patientId);
+            if (patient == null)
+                return NotFound(new { message = "Patient not found." });
+
+            // Find linked user
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.RefId == patient.PatientId && u.UserType == 3);
+
+            using var transaction = await _context.Database.BeginTransactionAsync();
+            try
+            {
+                // Remove patient record
+                _context.Patients.Remove(patient);
+
+                // Remove user record
+                if (user != null)
+                    _context.Users.Remove(user);
+
+                await _context.SaveChangesAsync();
+                await transaction.CommitAsync();
+
+                return Ok(new { message = "Patient deleted successfully." });
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                return StatusCode(500, new { message = "Error deleting patient.", error = ex.Message });
+            }
+        }
+
 
         [Authorize(Roles = "Admin")]
         [HttpGet("AppointmentReport")]
@@ -242,8 +288,7 @@ namespace HospitalManagementAPI.Controllers
                     DepartmentName = g.Key.DeptName,
                     TotalAppointments = g.Count(),
                     TotalDone = g.Count(x => x.Status == "Done"),
-                    TotalNoShow = g.Count(x => x.Status == "Cancelled" || x.Status == "NoShow"), // handle more no-show statuses if used
-                                                                                                 // get sample patient list (top N by date descending)
+                    TotalNoShow = g.Count(x => x.Status == "Cancelled" || x.Status == "NoShow"), 
                     SamplePatients = g.OrderByDescending(x => x.Date)
                                       .Select(x => new {
                                           x.AppointmentId,
@@ -257,11 +302,9 @@ namespace HospitalManagementAPI.Controllers
                 })
                 .ToListAsync();
 
-            // optionally filter doctors by minDoctorAppointments
             if (minDoctorAppointments > 0)
                 groupedByDoctor = groupedByDoctor.Where(d => d.TotalAppointments >= minDoctorAppointments).ToList();
 
-            // build department-level aggregation
             var deptGroups = groupedByDoctor
                 .GroupBy(d => new { d.DepartmentId, d.DepartmentName })
                 .Select(g => new
@@ -283,7 +326,6 @@ namespace HospitalManagementAPI.Controllers
                 })
                 .ToList();
 
-            // overall totals (hospital-wide for window)
             var overall = new
             {
                 From = start.ToString("yyyy-MM-dd"),

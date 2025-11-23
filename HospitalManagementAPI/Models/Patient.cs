@@ -1,11 +1,13 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 namespace HospitalManagementAPI.Models
 {
     public class Patient
     {
+        [Key]
         public int PatientId { get; set; }
 
         [Required]
@@ -14,9 +16,7 @@ namespace HospitalManagementAPI.Models
         [Required]
         public string Email { get; set; } = string.Empty;
 
-        // for now plain text to match existing workflow; later replace with hashed password
         [Required]
-        public string Password { get; set; } = string.Empty;
 
         public string? Gender { get; set; }
         public int? Age { get; set; }
@@ -29,5 +29,10 @@ namespace HospitalManagementAPI.Models
 
         // Navigation
         public List<Appointment>? Appointments { get; set; }
+
+        public int UserId { get; set; }
+        [ForeignKey("UserId")]
+        public User? User { get; set; }
+
     }
 }
