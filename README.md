@@ -115,7 +115,8 @@ appsettings.json
 
 | Login / Signup                                                                      | Patient Dashboard                                                                   | Doctor Schedule                                                                     |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| ![Admin](https://github.com/AhmadwithTalha/Digital-Doctor-Appointment-System/blob/222d1e6b6db5c16b62ed5c6f43e46488a2e3130c/Screenshot%201.png) | ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/2.png) | ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/3.png) |
+| | ![Admin](https://github.com/AhmadwithTalha/Digital-Doctor-Appointment-System/blob/20bfd3a1963f86eec5bc5462bc0feea725edddcc/Screenshot2.png) | ![Screen2](https://raw.githubusercontent.com/AhmadwithTalha/Digital-Doctor-Appointment-System/branch_name/Screenshot2.png) | ![Screen3](https://raw.githubusercontent.com/AhmadwithTalha/Digital-Doctor-Appointment-System/branch_name/Screenshot3.png) |
+ | ![](https://github.com/AhmadwithTalha/Digital-Doctor-Appointment-System/blob/20bfd3a1963f86eec5bc5462bc0feea725edddcc/Screenshot2.png) | ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/3.png) |
 
 | Appointment Queue                                                                   | SubAdmin Management                                                                 |
 | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
