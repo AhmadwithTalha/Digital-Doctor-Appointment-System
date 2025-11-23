@@ -109,20 +109,6 @@ Models/
 DTOs/
 Program.cs
 appsettings.json
----
-
-## 📸 App Screenshots (5 Pictures)
-
-| Login / Signup                                                                      | Patient Dashboard                                                                   | Doctor Schedule                                                                     |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| | ![Admin](https://github.com/AhmadwithTalha/Digital-Doctor-Appointment-System/blob/20bfd3a1963f86eec5bc5462bc0feea725edddcc/Screenshot2.png) | ![Screen2](https://raw.githubusercontent.com/AhmadwithTalha/Digital-Doctor-Appointment-System/branch_name/Screenshot2.png) | ![Screen3](https://raw.githubusercontent.com/AhmadwithTalha/Digital-Doctor-Appointment-System/branch_name/Screenshot3.png) |
- | ![](https://github.com/AhmadwithTalha/Digital-Doctor-Appointment-System/blob/20bfd3a1963f86eec5bc5462bc0feea725edddcc/Screenshot2.png) | ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/3.png) |
-
-| Appointment Queue                                                                   | SubAdmin Management                                                                 |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/4.png) | ![](https://github.com/yourusername/Digital-Doctor-Appointment-System/assets/5.png) |
-
----
 
 ## 🧰 How to Run the Project
 
